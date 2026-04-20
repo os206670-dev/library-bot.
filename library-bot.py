@@ -3,7 +3,6 @@ import re
 import json
 import os
 import threading
-import asyncio
 from datetime import datetime, timedelta
 from flask import Flask
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -78,15 +77,14 @@ def adjust_for_weekend(dt):
     if dt.weekday() == 5: return dt + timedelta(days=1) 
     return dt
 
-# --- 4. نظام التذكير قبل الموعد ---
+# --- 4. نظام التذكير المحدث ---
 async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now()
     for uid, loan in ACTIVE_LOANS.items():
-        # التذكير قبل الموعد بـ 24 ساعة
         reminder_time = loan['return_date'] - timedelta(days=1)
         if now >= reminder_time and not loan.get('reminded'):
             try:
-                await context.bot.send_message(chat_id=uid, text=f"⏰ **تذكير من مكتبة ابن العميد:**\nعزيزي الطالب، يتبقى يوم واحد على موعد إرجاع كتاب: ({loan['book']}).\nيرجى تسليمه في الموعد المحدد.")
+                await context.bot.send_message(chat_id=uid, text=f"⏰ **تذكير:** يتبقى يوم واحد على موعد إرجاع كتاب: ({loan['book']}).")
                 loan['reminded'] = True
                 save_data()
             except: pass
@@ -102,7 +100,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             kb.append([InlineKeyboardButton("⏳ تمديد أسبوع إضافي", callback_data="extend_loan")])
         await update.message.reply_text(f"✨ مرحباً بك مجدداً!\n\nأنت تستعير: {loan['book']}\nالموعد: {format_date(loan['return_date'])}", reply_markup=InlineKeyboardMarkup(kb))
         return
-    await update.message.reply_text("📚 أهلاً بك في نظام مكتبة ابن العميد الذكي\nيسعدنا مساعدتك في اختيار كتابك القادم.\n\nمن فضلك، أرسل **اسمك الثلاثي** للبدء:")
+    await update.message.reply_text("📚 أهلاً بك في نظام مكتبة ابن العميد الذكي\n\nمن فضلك، أرسل **اسمك الثلاثي** للبدء:")
     context.user_data['step'] = 'NAME'
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -111,18 +109,18 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     if step == 'NAME':
         context.user_data['student_name'] = text
-        await update.message.reply_text("📍 رائع! الآن أرسل **الصف والشعبة** (مثال: 3/1):")
+        await update.message.reply_text("📍 أرسل **الصف والشعبة** (مثال: 3/1):")
         context.user_data['step'] = 'CLASS'
     elif step == 'CLASS':
         context.user_data['student_class'] = text
-        await update.message.reply_text("📞 أخيراً، أرسل **رقم جوالك** للتواصل:")
+        await update.message.reply_text("📞 أرسل **رقم جوالك**:")
         context.user_data['step'] = 'PHONE'
     elif step == 'PHONE':
         if re.match(r'^0\d{9}$', text):
             context.user_data['student_phone'] = text
             context.user_data['step'] = 'DONE'
             kb = [[InlineKeyboardButton(cat, callback_data=f"cat_{cat}")] for cat in LIBRARY_DATA.keys()]
-            await update.message.reply_text("✅ تم التسجيل بنجاح. اختر قسماً:", reply_markup=InlineKeyboardMarkup(kb))
+            await update.message.reply_text("✅ تم التسجيل. اختر قسماً:", reply_markup=InlineKeyboardMarkup(kb))
         else: await update.message.reply_text("❌ أرسل 10 أرقام تبدأ بـ 0:")
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -163,16 +161,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         loan = ACTIVE_LOANS.get(user_id)
         if loan and not loan.get('extended'):
             loan['return_date'] = adjust_for_weekend(loan['return_date'] + timedelta(days=7))
-            loan['extended'], loan['reminded'] = True, False # إعادة تفعيل التذكير للموعد الجديد
+            loan['extended'], loan['reminded'] = True, False 
             save_data()
-            await query.edit_message_text(f"✅ تم التمديد أسبوعاً.\nالموعد الجديد: {format_date(loan['return_date'])}")
+            await query.edit_message_text(f"✅ تم التمديد.\nالموعد الجديد: {format_date(loan['return_date'])}")
 
     elif data == "req_ret":
         loan = ACTIVE_LOANS.get(user_id)
         if loan:
             kb = [[InlineKeyboardButton("✅ تأكيد الاستلام", callback_data=f"conf_{user_id}")]]
             await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=f"📥 **طلب إرجاع:** {loan['name']}\n📖 {loan['book']}", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
-            await query.edit_message_text("⏳ تم إرسال الطلب. يرجى تسليم الكتاب للمكتبة.")
+            await query.edit_message_text("⏳ تم إرسال الطلب للمكتبة.")
 
     elif data.startswith("conf_"):
         uid = int(data.split("_")[1])
@@ -192,16 +190,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     load_data()
     threading.Thread(target=run_flask, daemon=True).start()
-    app = Application.builder().token(TOKEN).build()
     
-    # إضافة وظيفة التذكير التلقائي (تعمل كل ساعة للفحص)
-    job_queue = app.job_queue
-    job_queue.run_repeating(reminder_job, interval=3600, first=10)
+    # حل مشكلة NoneType object has no attribute 'run_repeating'
+    application = Application.builder().token(TOKEN).build()
     
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    app.add_handler(CallbackQueryHandler(handle_callback))
-    app.run_polling(drop_pending_updates=True)
+    if application.job_queue:
+        application.job_queue.run_repeating(reminder_job, interval=3600, first=10)
+    
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    application.add_handler(CallbackQueryHandler(handle_callback))
+    
+    application.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__': main()
-        
+            
