@@ -3,28 +3,14 @@ import re
 import json
 import os
 from datetime import datetime, timedelta
-from flask import Flask
-from threading import Thread
+import locale
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
-# --- سيرفر Keep Alive لمنع البوت من النوم ---
-server = Flask('')
-
-@server.route('/')
-def home():
-    return "البوت يعمل بنجاح (مكتبة ابن العميد)!"
-
-def run_server():
-    server.run(host='0.0.0.0', port=8080)
-
-def keep_alive():
-    t = Thread(target=run_server)
-    t.start()
-
-# --- إعدادات البوت الأساسية ---
+# إعدادات التسجيل
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
+# إعدادات الحساب والمجموعة
 TOKEN = '8461701738:AAE4g9ukO2IkiPX2PEJJzOdw29JP_sPEWDs' 
 ADMIN_GROUP_ID = -1003983944808 
 DATA_FILE = "library_storage.json"
@@ -32,7 +18,7 @@ DATA_FILE = "library_storage.json"
 BORROWED_BOOKS = set()
 ACTIVE_LOANS = {}
 
-# [بيانات الكتب - كما هي في كودك السابق]
+# بيانات الكتب (كما هي)
 LIBRARY_DATA = {
     'تطوير الذات والإدارة': {
         'لا تحزن (لا تخزن)': 'نصائح لمواجهة الهموم والقلق والتركيز على الجانب الإيماني.',
@@ -66,7 +52,7 @@ LIBRARY_DATA = {
     }
 }
 
-# --- وظائف الحفظ (لضمان بقاء البيانات) ---
+# دالة حفظ البيانات
 def save_data():
     serializable_loans = {}
     for uid, loan in ACTIVE_LOANS.items():
@@ -77,6 +63,7 @@ def save_data():
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump({"BORROWED_BOOKS": list(BORROWED_BOOKS), "ACTIVE_LOANS": serializable_loans}, f, ensure_ascii=False, indent=4)
 
+# دالة تحميل البيانات
 def load_data():
     global BORROWED_BOOKS, ACTIVE_LOANS
     if os.path.exists(DATA_FILE):
@@ -88,7 +75,6 @@ def load_data():
                 ACTIVE_LOANS = {int(uid): {**l, 'date': datetime.fromisoformat(l['date']), 'return_date': datetime.fromisoformat(l['return_date'])} for uid, l in raw_loans.items()}
         except: pass
 
-# --- الأوامر والوظائف الأساسية ---
 def format_date(dt):
     days = ["الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت", "الأحد"]
     return f"{days[dt.weekday()]} {dt.strftime('%Y/%m/%d')}"
@@ -106,35 +92,39 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kb = [[InlineKeyboardButton("📥 طلب إرجاع الكتاب الآن", callback_data="req_ret")]]
         if not loan.get('extended'):
             kb.append([InlineKeyboardButton("⏳ طلب تمديد (7 أيام)", callback_data="extend_loan")])
-        await update.message.reply_text(f"أنت تستعير حالياً: {loan['book']}\nموعد الإرجاع: {format_date(loan['return_date'])}", reply_markup=InlineKeyboardMarkup(kb))
+        await update.message.reply_text(f"مرحباً بك مجدداً!\n\nأنت تستعير حالياً: {loan['book']}\nموعد الإرجاع: {format_date(loan['return_date'])}", reply_markup=InlineKeyboardMarkup(kb))
         return
-    await update.message.reply_text("✨ مرحباً بك في مكتبة ابن العميد الذكية\n\nيرجى إرسال اسمك الثلاثي:")
+    
+    await update.message.reply_text("✨ مرحباً بك في نظام مكتبة ابن العميد الذكي\n\nيرجى إرسال اسمك الثلاثي للبدء:")
     context.user_data['step'] = 'NAME'
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     step = context.user_data.get('step')
     if not step: return
     text = update.message.text.strip()
+    
     if step == 'NAME':
         context.user_data['student_name'] = text
-        await update.message.reply_text("📍 أرسل فصلك الدراسي:")
+        await update.message.reply_text("📍 أرسل فصلك الدراسي (مثال: 3/1):")
         context.user_data['step'] = 'CLASS'
     elif step == 'CLASS':
         context.user_data['student_class'] = text
-        await update.message.reply_text("📞 أرسل رقم جوالك:")
+        await update.message.reply_text("📞 أرسل رقم جوالك للتواصل:")
         context.user_data['step'] = 'PHONE'
     elif step == 'PHONE':
         if re.match(r'^0\d{9}$', text):
             context.user_data['student_phone'] = text
             context.user_data['step'] = 'DONE'
             kb = [[InlineKeyboardButton(cat, callback_data=f"cat_{cat}")] for cat in LIBRARY_DATA.keys()]
-            await update.message.reply_text("✅ تم التسجيل. اختر القسم:", reply_markup=InlineKeyboardMarkup(kb))
+            await update.message.reply_text("✅ تم تسجيل بياناتك بنجاح.\nاختر قسماً لتصفح الكتب:", reply_markup=InlineKeyboardMarkup(kb))
         else:
-            await update.message.reply_text("❌ رقم خاطئ، يرجى كتابة 10 أرقام:")
+            await update.message.reply_text("❌ رقم غير صحيح، يرجى كتابة 10 أرقام تبدأ بـ 0:")
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    # أهم سطر لحل تعليق الآيفون (يخبر التطبيق أن الطلب تم استلامه فوراً)
     await query.answer()
+    
     data = query.data
     user_id = query.from_user.id
 
@@ -142,8 +132,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cat = data.split("_", 1)[1]
         context.user_data['current_cat'] = cat
         buttons = [[InlineKeyboardButton(f"{'🔴' if b in BORROWED_BOOKS else '🟢'} {b}", callback_data=f"info_{b}")] for b in LIBRARY_DATA[cat].keys()]
-        buttons.append([InlineKeyboardButton("🔙 العودة", callback_data="back_to_cats")])
-        await query.edit_message_text(f"📚 قسم {cat}:", reply_markup=InlineKeyboardMarkup(buttons))
+        buttons.append([InlineKeyboardButton("🔙 العودة للأقسام", callback_data="back_to_cats")])
+        await query.edit_message_text(f"📚 كتب قسم {cat}:", reply_markup=InlineKeyboardMarkup(buttons))
 
     elif data.startswith("info_"):
         book = data.split("_", 1)[1]
@@ -154,19 +144,23 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("terms_"):
         book = data.split("_", 1)[1]
-        terms = "⚠️ شروطنا:\n1- الحفاظ على الكتاب.\n2- الالتزام بالموعد.\n\nهل توافق؟"
-        kb = [[InlineKeyboardButton("✅ موافق", callback_data=f"brw_{book}")], [InlineKeyboardButton("❌ إلغاء", callback_data="back_to_cats")]]
+        terms = "⚠️ شروط الاستعارة:\n\n1- الالتزام بالوقت.\n2- المحافظة على الكتاب.\n3- التعويض في حال التلف.\n\nهل توافق؟"
+        kb = [[InlineKeyboardButton("✅ أوافق وأؤكد", callback_data=f"brw_{book}")], [InlineKeyboardButton("❌ إلغاء", callback_data="back_to_cats")]]
         await query.edit_message_text(terms, reply_markup=InlineKeyboardMarkup(kb))
 
     elif data.startswith("brw_"):
         book = data.split("_", 1)[1]
+        if book in BORROWED_BOOKS or user_id in ACTIVE_LOANS: return
         now = datetime.now()
         ret = adjust_for_weekend(now + timedelta(days=7))
+        
         BORROWED_BOOKS.add(book)
         ACTIVE_LOANS[user_id] = {'book': book, 'name': context.user_data.get('student_name'), 'class': context.user_data.get('student_class'), 'phone': context.user_data.get('student_phone'), 'date': now, 'return_date': ret}
         save_data()
-        await query.edit_message_text(f"✅ تمت الاستعارة!\nموعد الإرجاع: {format_date(ret)}")
-        admin_msg = f"🔔 استعارة جديدة:\n👤 {ACTIVE_LOANS[user_id]['name']}\n📖 {book}\n🔙 الموعد: {format_date(ret)}"
+        
+        await query.edit_message_text(f"✅ تمت الاستعارة!\nكتاب: {book}\nموعد الإرجاع: {format_date(ret)}")
+        
+        admin_msg = f"🔔 استعارة جديدة:\n👤 {ACTIVE_LOANS[user_id]['name']}\n📍 {ACTIVE_LOANS[user_id]['class']}\n📞 {ACTIVE_LOANS[user_id]['phone']}\n📖 {book}\n🔙 الموعد: {format_date(ret)}"
         await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=admin_msg)
 
     elif data == "req_ret":
@@ -174,7 +168,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if loan:
             kb = [[InlineKeyboardButton("✅ تأكيد الاستلام", callback_data=f"conf_{user_id}")]]
             await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=f"📥 طلب إرجاع:\n👤 {loan['name']}\n📖 {loan['book']}", reply_markup=InlineKeyboardMarkup(kb))
-            await query.edit_message_text("⏳ أرسلنا طلبك للمسؤول. سلم الكتاب للمكتبة.")
+            await query.edit_message_text("⏳ تم إرسال طلبك. يرجى تسليم الكتاب للمكتبة.")
 
     elif data.startswith("conf_"):
         uid = int(data.split("_")[1])
@@ -193,15 +187,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     load_data()
-    # تشغيل سيرفر Keep Alive قبل تشغيل البوت
-    keep_alive()
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CallbackQueryHandler(handle_callback))
-    print("--- البوت يعمل الآن على Replit ---")
+    # drop_pending_updates=True مهمة جداً لعدم تعليق البوت عند إعادة التشغيل
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
     main()
-
